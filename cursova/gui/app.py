@@ -12,9 +12,9 @@ from cursova.core import (
     AVAILABLE_SCALES,
     build_pairwise_matrix,
     compute_weights,
+    generate_recommendations,
     evaluate_consistency,
 )
-from cursova.core.consistency import generate_recommendations
 from cursova.core.scales import ScaleDefinition
 from cursova.core.pcm import default_ratio
 
@@ -494,7 +494,13 @@ class ComparisonApp(tk.Tk):
         matrix, log = build_pairwise_matrix(self.alternatives, self.judgments)
         weights = compute_weights(matrix)
         report = evaluate_consistency(matrix)
-        recommendations = generate_recommendations(report, self.alternatives)
+        recommendations = generate_recommendations(
+            report,
+            matrix,
+            self.alternatives,
+            self.judgments,
+            weights,
+        )
         self._update_results_table(weights)
         self._update_metrics(report)
         self._update_suggestions(recommendations)

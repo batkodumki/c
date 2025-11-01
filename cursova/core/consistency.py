@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from numpy.typing import NDArray
+
+from .ranking import compute_weights
+from .scales import AVAILABLE_SCALES
 
 RI_TABLE = {
     1: 0.0,
@@ -47,26 +50,91 @@ def evaluate_consistency(matrix: NDArray[np.float64], threshold: float = 0.1) ->
     return ConsistencyReport(lambda_max=lambda_max, ci=ci, cr=cr, threshold=threshold)
 
 
+JudgmentMap = Dict[Tuple[str, str], Tuple[float, float, str, str]]
+
+
 def generate_recommendations(
     report: ConsistencyReport,
+    matrix: NDArray[np.float64],
     alternatives: List[str],
+    judgments: JudgmentMap,
+    weights: Optional[NDArray[np.float64]] = None,
 ) -> List[Recommendation]:
     if report.is_consistent() or len(alternatives) < 2:
         return []
-    return [
-        Recommendation(
-            title="Перегляньте судження",
-            details=(
-                "Перевірте пари альтернатив з найбільшою невизначеністю та "
-                "уточніть обрані шкали, зокрема для альтернатив у середині ранжування."
-            ),
-        ),
-        Recommendation(
-            title="Уточніть шкали",
-            details=(
-                "Спробуйте використати шкали з більшою градацією (Ма–Чжен або "
-                "Донаган–Додд–МакМастер) для пар, де оцінки викликають сумнів."
-            ),
-        ),
-    ]
+
+    if weights is None:
+        weights = compute_weights(matrix)
+
+    alt_index = {alt: idx for idx, alt in enumerate(alternatives)}
+
+    discrepancies: List[Tuple[float, str, str, float, float, str, str]] = []
+    for (ai, aj), (_, _, scale_key, choice_label) in judgments.items():
+        i = alt_index.get(ai)
+        j = alt_index.get(aj)
+        if i is None or j is None:
+            continue
+        denominator = weights[j]
+        if denominator <= 0:
+            continue
+        expected_ratio = weights[i] / denominator
+        if expected_ratio <= 0:
+            continue
+        actual_ratio = matrix[i, j]
+        if actual_ratio <= 0:
+            continue
+        gap = abs(np.log(actual_ratio / expected_ratio))
+        scale_name = (
+            AVAILABLE_SCALES.get(scale_key).name if scale_key in AVAILABLE_SCALES else scale_key
+        )
+        discrepancies.append(
+            (
+                gap,
+                ai,
+                aj,
+                actual_ratio,
+                expected_ratio,
+                scale_name,
+                choice_label,
+            )
+        )
+
+    discrepancies.sort(reverse=True, key=lambda item: item[0])
+
+    recommendations: List[Recommendation] = []
+    for gap, ai, aj, actual, expected, scale_name, choice_label in discrepancies[:3]:
+        recommendations.append(
+            Recommendation(
+                title=f"Перегляньте пару {ai} ⇔ {aj}",
+                details=(
+                    "Поточне відношення переваги становить "
+                    f"{actual:.3f}, а узгоджене за вагами — {expected:.3f}. "
+                    f"Поточний вибір: «{choice_label}» (шкала {scale_name}). "
+                    "Спробуйте уточнити градацію у вибраній шкалі для цієї пари."
+                ),
+            )
+        )
+
+    if not recommendations:
+        recommendations.append(
+            Recommendation(
+                title="Перегляньте судження",
+                details=(
+                    "Переконайтеся, що всі пари оцінено послідовно, та за потреби "
+                    "уточніть градації в деталізованіших шкалах (Ма–Чжен, Донаган–Додд–МакМастер)."
+                ),
+            )
+        )
+    else:
+        recommendations.append(
+            Recommendation(
+                title="Уточніть шкали",
+                details=(
+                    "Для пар із найбільшими відхиленнями використайте шкали з більшою "
+                    "кількістю градацій або повторно оцініть альтернативи."
+                ),
+            )
+        )
+
+    return recommendations
 
